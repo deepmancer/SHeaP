@@ -1,0 +1,52 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sheap"
+version = "0.1.0"
+description = "SHeaP: Self-Supervised Head Geometry Predictor Learned via 2D Gaussians"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE.txt" }
+authors = [
+    { name = "Liam Schoneveld" }
+]
+keywords = ["3d", "face", "flame", "head", "mesh", "reconstruction"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "chumpy",
+    "numpy>=1.20.0",
+    "pillow>=9.0.0",
+    "pyrender>=0.1.45",
+    "roma>=1.5.4",
+    "scipy>=1.16.3",
+    "torch>=2.0.0",
+    "torchaudio>=2.0.0",
+    "torchvision>=0.15.1",
+    "tqdm>=4.67.1",
+    "trimesh>=4.9.0",
+]
+
+[project.urls]
+Homepage = "https://nlml.github.io/sheap"
+Repository = "https://github.com/nlml/sheap"
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.3.0",
+]
+
+[tool.uv.sources]
+chumpy = { git = "https://github.com/nlml/chumpy.git" }
+
+[tool.hatch.build.targets.wheel]
+packages = ["sheap"]
