@@ -1,11 +1,30 @@
-# 🐑 SHeaP 🐑
-Code and models for inferencing [SHeaP: Self-Supervised Head Geometry Predictor Learned via 2D Gaussians](https://nlml.github.io/sheap).
+<div align="center">
+<h1>🐑 SHeaP 🐑</h1>
+<h2>Self-Supervised Head Geometry Predictor Learned via 2D Gaussians</h2>
+
+<a href="https://nlml.github.io/sheap" target="_blank" rel="noopener noreferrer">
+  <img src="https://img.shields.io/badge/Project_Page-green" alt="Project Page">
+</a>
+<a href="https://arxiv.org/abs/2504.12292"><img src="https://img.shields.io/badge/arXiv-2504.12292-b31b1b" alt="arXiv"></a>
+<a href="https://www.youtube.com/watch?v=vhXsZJWCBMA"><img src="https://img.shields.io/badge/YouTube-Video-red" alt="YouTube"></a>
+
+**Liam Schoneveld, Zhe Chen, Davide Davoli, Jiapeng Tang, Saimon Terazawa, Ko Nishino, Matthias Nießner**
+
+<img src="teaser.jpg" alt="SHeaP Teaser" width="100%">
+
+</div>
+
+## Overview
+
+SHeaP learns to predict head geometry (FLAME parameters) from a single image, by predicting and rendering 2D Gaussians.
+
+This repository contains code and models for the **FLAME parameter inference only**.
 
 ## Example usage
 
 After setting up, run `python demo.py`.
 
-Here is a minimal example script:
+Or, here is a minimal example script:
 
 ```python
 import torch, torchvision.io as io
@@ -15,13 +34,14 @@ from sheap import load_sheap_model
 sheap_model = load_sheap_model(model_type="expressive")
 impath = "example_images/00000200.png"
 image_tensor = io.decode_image(impath).float() / 255
+# flame_params_dict contains predicted FLAME parameters
 flame_params_dict = sheap_model(image_tensor[None])
 ```
 
 **Note: `model_type`** can be one of 2 values:
 
 - **`"paper"`**: used for paper results; gets best performance on NoW.
-- **`"expressive"`**: perhaps better for real-world use; less regularisation, more expressive.
+- **`"expressive"`**: perhaps better for real-world use; it was trained for longer with less regularisation and tends to be more expressive.
 
 ## Setup
 
@@ -34,6 +54,8 @@ Just install the latest `torch` in a new venv, then `pip install .`
 Or, if you use [`uv`](https://docs.astral.sh/uv/), you can just run `uv sync`.
 
 ### Step 2: Download and convert FLAME
+
+Only needed if you want to predict FLAME vertices or render a mesh.
 
 Download [FLAME2020](https://flame.is.tue.mpg.de/).
 
