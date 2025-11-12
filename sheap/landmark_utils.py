@@ -81,3 +81,63 @@ def vertices_to_7_lmks(
     lmks7_3d = landmark_51[:, [19, 22, 25, 28, 16, 31, 37]]
 
     return lmks7_3d, lmks_3d
+
+
+def landmarks_2_face_bounding_box(
+    landmarks: Tensor,
+    valid: Tensor,
+    margin: float = 0.1,
+    clamp: bool = True,
+    shift_up: float = 0.0,
+    too_small_threshold: float = 0.02,
+    aspect_ratio: float = 1.0,
+) -> Tensor:
+    """
+    Calculate a square bounding box around face landmarks with a specified margin for batched inputs.
+
+    Parameters:
+    - landmarks: torch.Tensor of shape [B1,...,BN,L,2], normalized face landmarks.
+    - valid: torch.Tensor of shape [B1,...,BN], boolean indicating validity of each entry.
+    - margin: float, margin factor to expand the bounding box around the face.
+    - clamp: bool, whether to clamp the bounding box to [0, 1].
+    - shift_up: float, factor to shift the bounding box up.
+    - too_small_threshold: float, threshold for the bounding box size.
+    - aspect_ratio: float, aspect ratio of the image that the landmarks live on (width / height).
+        The box size will be divided by this value, under the assumption that you are going to
+        multiply these normalised coordinates by the image width later.
+
+    Returns:
+    - bbox: torch.Tensor of shape [B1,...,BN,4] representing the square bounding box.
+    """
+    # Calculate min and max coordinates along the last dimension for x and y
+    min_coords, _ = landmarks.min(dim=-2)
+    max_coords, _ = landmarks.max(dim=-2)
+
+    # Calculate the center and size of the bounding box
+    center_coords = (min_coords + max_coords) / 2
+    half_size = ((max_coords - min_coords).max(dim=-1).values) / 2
+    not_too_small = half_size > too_small_threshold
+    valid = valid & not_too_small
+
+    # Apply margin
+    shift_up = shift_up * half_size
+    half_size *= 1 + margin
+
+    # Calculate the square bounding box coordinates
+    x_min = center_coords[..., 0] - half_size / aspect_ratio
+    x_max = center_coords[..., 0] + half_size / aspect_ratio
+    y_min = center_coords[..., 1] - half_size - shift_up
+    y_max = center_coords[..., 1] + half_size - shift_up
+
+    # Stack to get the final bounding box tensor
+    bbox = torch.stack([x_min, y_min, x_max, y_max], dim=-1)
+
+    # Create a full image bounding box of [0, 0, 1, 1]
+    full_image_bbox = torch.tensor([0.0, 0.0, 1.0, 1.0], device=landmarks.device)
+
+    # Overwrite invalid entries with the full image bounding box
+    bbox = torch.where(valid.unsqueeze(-1), bbox, full_image_bbox)
+
+    if clamp:
+        return bbox.clamp(0, 1)
+    return bbox
