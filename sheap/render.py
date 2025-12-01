@@ -13,6 +13,7 @@ def render_mesh(
     img_width: int = 512,
     img_height: int = 512,
     fov_degrees: Union[float, int] = 14.2539,
+    render_normals: bool = True,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Render a mesh using pyrender with a perspective camera defined by FOV.
 
@@ -23,6 +24,7 @@ def render_mesh(
         img_width: Rendered image width in pixels. Default is 512.
         img_height: Rendered image height in pixels. Default is 512.
         fov_degrees: Vertical field of view in degrees. Default is 14.2539.
+        render_normals: If True, render normals as RGB. If False, render with lighting. Default is True.
 
     Returns:
         Tuple containing:
@@ -44,16 +46,29 @@ def render_mesh(
     # Create trimesh mesh
     mesh = trimesh.Trimesh(vertices=verts, faces=faces)
 
+    if render_normals:
+        # Get vertex normals and map to RGB colors
+        # Trimesh automatically computes normals when accessed
+        normals = mesh.vertex_normals
+        # Transform normals to camera space
+        w2c = np.linalg.inv(c2w)
+        normals_camera = normals @ w2c[:3, :3].T
+        # Map from [-1, 1] to [0, 255] for RGB
+        vertex_colors = ((normals_camera + 1.0) * 0.5 * 255).astype(np.uint8)
+        mesh.visual.vertex_colors = vertex_colors
+
     # Convert to pyrender mesh
     render_mesh = pyrender.Mesh.from_trimesh(mesh)
 
     # Create scene
-    scene = pyrender.Scene(ambient_light=[0.3, 0.3, 0.3])
+    if render_normals:
+        scene = pyrender.Scene(ambient_light=[1.0, 1.0, 1.0])
+    else:
+        scene = pyrender.Scene(ambient_light=[0.3, 0.3, 0.3])
+        # Add directional light
+        light = pyrender.DirectionalLight(color=[1.0, 1.0, 1.0], intensity=3.0)
+        scene.add(light, pose=c2w)
     scene.add(render_mesh)
-
-    # Add directional light
-    light = pyrender.DirectionalLight(color=[1.0, 1.0, 1.0], intensity=3.0)
-    scene.add(light, pose=c2w)
 
     # Perspective camera
     camera = pyrender.PerspectiveCamera(yfov=yfov, aspectRatio=img_width / img_height)
