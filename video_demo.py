@@ -106,13 +106,17 @@ class RenderingThread(threading.Thread):
 
 
 class VideoFrameDataset(IterableDataset):
-    """Iterable dataset for streaming video frames with face detection and cropping."""
+    """Iterable dataset for streaming video frames with face detection and cropping.
+
+    Uses a background thread for video frame loading while face detection runs in the main thread.
+    """
 
     def __init__(
         self,
         video_path: str,
         fa_model: face_alignment.FaceAlignment,
         smoothing_alpha: float = 0.3,
+        frame_buffer_size: int = 32,
     ):
         """
         Initialize video frame dataset.
@@ -122,11 +126,13 @@ class VideoFrameDataset(IterableDataset):
             fa_model: FaceAlignment model instance for face detection
             smoothing_alpha: Smoothing factor for bounding box (0=no smoothing, 1=no change).
                            Lower values = more smoothing
+            frame_buffer_size: Size of the frame buffer queue for the background thread
         """
         super().__init__()
         self.video_path = video_path
         self.fa_model = fa_model
         self.smoothing_alpha = smoothing_alpha
+        self.frame_buffer_size = frame_buffer_size
         self.prev_bbox: Optional[Tuple[int, int, int, int]] = None
 
         # Get video metadata (don't keep capture open)
@@ -144,9 +150,43 @@ class VideoFrameDataset(IterableDataset):
             f"Video info: {self.num_frames} frames, {self.fps:.2f} fps, {self.width}x{self.height}"
         )
 
+    def _video_reader_thread(self, frame_queue: Queue, stop_event: threading.Event):
+        """Background thread that reads video frames and puts them in a queue.
+
+        Args:
+            frame_queue: Queue to put (frame_idx, frame_rgb) tuples
+            stop_event: Event to signal thread to stop
+        """
+        cap = cv2.VideoCapture(self.video_path)
+        if not cap.isOpened():
+            frame_queue.put(("error", f"Could not open video file: {self.video_path}"))
+            return
+
+        frame_idx = 0
+        try:
+            while not stop_event.is_set():
+                ret, frame_bgr = cap.read()
+                if not ret:
+                    break
+
+                # Convert BGR to RGB
+                frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+
+                # Put frame in queue (blocks if queue is full)
+                frame_queue.put((frame_idx, frame_rgb))
+                frame_idx += 1
+
+        finally:
+            cap.release()
+            # Signal end of video
+            frame_queue.put(None)
+
     def __iter__(self):
         """
         Iterate through video frames sequentially.
+
+        Video frame loading happens in a background thread, while face detection
+        and processing happen in the main thread.
 
         Yields:
             Dictionary containing frame_idx, processed image, and bounding box
@@ -154,48 +194,57 @@ class VideoFrameDataset(IterableDataset):
         # Reset smoothing state for new iteration
         self.prev_bbox = None
 
-        # Open video capture for this iteration
-        cap = cv2.VideoCapture(self.video_path)
-        if not cap.isOpened():
-            raise RuntimeError(f"Could not open video file: {self.video_path}")
+        # Create queue and start background thread for video reading
+        frame_queue = Queue(maxsize=self.frame_buffer_size)
+        stop_event = threading.Event()
+        reader_thread = threading.Thread(
+            target=self._video_reader_thread, args=(frame_queue, stop_event), daemon=True
+        )
+        reader_thread.start()
 
-        frame_idx = 0
-        while True:
-            # Read frame
-            ret, frame_bgr = cap.read()
-            if not ret:
-                break
+        try:
+            while True:
+                # Get frame from background thread
+                item = frame_queue.get()
 
-            # Convert BGR to RGB
-            frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+                # Check for end of video
+                if item is None:
+                    break
 
-            # Convert to torch tensor (C, H, W) with values in [0, 1]
-            image = torch.from_numpy(frame_rgb).permute(2, 0, 1).float() / 255.0
+                # Check for error
+                if isinstance(item, tuple) and len(item) == 2 and item[0] == "error":
+                    raise RuntimeError(item[1])
 
-            # Detect face and crop
-            bbox = detect_face_and_crop(image, self.fa_model, margin=0.9, shift_up=0.5)
+                frame_idx, frame_rgb = item
 
-            # Apply smoothing using exponential moving average
-            bbox = self._smooth_bbox(bbox)
-            x0, y0, x1, y1 = bbox
+                # Convert to torch tensor (C, H, W) with values in [0, 1]
+                image = torch.from_numpy(frame_rgb).permute(2, 0, 1).float() / 255.0
 
-            cropped = image[:, y0:y1, x0:x1]
+                # Detect face and crop (runs in main thread, can use GPU)
+                bbox = detect_face_and_crop(image, self.fa_model, margin=0.9, shift_up=0.5)
 
-            # Resize to 224x224 for SHEAP model
-            cropped_resized = TF.resize(cropped, [224, 224], antialias=True)
-            cropped_for_render = TF.resize(cropped, [512, 512], antialias=True)
+                # Apply smoothing using exponential moving average
+                bbox = self._smooth_bbox(bbox)
+                x0, y0, x1, y1 = bbox
 
-            yield {
-                "frame_idx": frame_idx,
-                "image": cropped_resized,
-                "bbox": bbox,
-                "original_frame": frame_rgb,  # Keep original for reference (as numpy array)
-                "cropped_frame": cropped_for_render,  # Cropped region resized to 512x512
-            }
+                cropped = image[:, y0:y1, x0:x1]
 
-            frame_idx += 1
+                # Resize to 224x224 for SHEAP model
+                cropped_resized = TF.resize(cropped, [224, 224], antialias=True)
+                cropped_for_render = TF.resize(cropped, [512, 512], antialias=True)
 
-        cap.release()
+                yield {
+                    "frame_idx": frame_idx,
+                    "image": cropped_resized,
+                    "bbox": bbox,
+                    "original_frame": frame_rgb,  # Keep original for reference (as numpy array)
+                    "cropped_frame": cropped_for_render,  # Cropped region resized to 512x512
+                }
+
+        finally:
+            # Clean up background thread
+            stop_event.set()
+            reader_thread.join(timeout=1.0)
 
     def _smooth_bbox(self, bbox: Tuple[int, int, int, int]) -> Tuple[int, int, int, int]:
         """Apply exponential moving average smoothing to bounding box."""
@@ -224,12 +273,12 @@ class VideoFrameDataset(IterableDataset):
 def process_video(
     video_path: str,
     model_type: str = "expressive",
-    batch_size: int = 8,
+    batch_size: int = 1,
     num_workers: int = 0,
     device: str = "cuda" if torch.cuda.is_available() else "cpu",
     output_video_path: Optional[str] = None,
     render_size: int = 512,
-    num_render_workers: int = 16,
+    num_render_workers: int = 1,
     max_queue_size: int = 128,
 ) -> List[Dict[str, Any]]:
     """
