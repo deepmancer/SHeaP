@@ -5,6 +5,7 @@
 <a href="https://nlml.github.io/sheap" target="_blank" rel="noopener noreferrer">
   <img src="https://img.shields.io/badge/Project_Page-green" alt="Project Page">
 </a>
+<a href="https://huggingface.co/spaces/nlml/sheap"><img src="https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-blue?style=flat", alt="HuggingFace Spaces">
 <a href="https://arxiv.org/abs/2504.12292"><img src="https://img.shields.io/badge/arXiv-2504.12292-b31b1b" alt="arXiv"></a>
 <a href="https://www.youtube.com/watch?v=vhXsZJWCBMA"><img src="https://img.shields.io/badge/YouTube-Video-red" alt="YouTube"></a>
 
