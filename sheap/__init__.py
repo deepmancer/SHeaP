@@ -1,6 +1,7 @@
 """SHeaP: Self-Supervised Head Geometry Predictor Learned via 2D Gaussians."""
 
 from .eval_utils import ImsDataset, inference_images_list, save_result
+from .flame_segmentation import create_binary_mask_texture
 from .landmark_utils import vertices_to_7_lmks, vertices_to_landmarks
 from .load_flame_pkl import load_pkl_format_flame_model
 from .load_model import load_sheap_model
@@ -18,4 +19,5 @@ __all__ = [
     "ImsDataset",
     "render_mesh",
     "load_sheap_model",
+    "create_binary_mask_texture",
 ]

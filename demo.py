@@ -1,53 +1,105 @@
+import json
 import os
 from pathlib import Path
 
 import numpy as np
 import torch
 from PIL import Image
+from roma import rotvec_to_rotmat
+from scipy import ndimage
 
 from sheap import inference_images_list, load_sheap_model, render_mesh
+from sheap.flame_segmentation import create_binary_mask_texture
 from sheap.tiny_flame import TinyFlame, pose_components_to_rotmats
 
 os.environ["PYOPENGL_PLATFORM"] = "egl"
 
 
-def create_rendering_image(
-    original_image: Image.Image,
+def fill_mask_holes(mask: np.ndarray) -> np.ndarray:
+    """Fill interior holes in binary mask (e.g., open mouth region)."""
+    # Invert: black (0) -> white (255), white (255) -> black (0)
+    inverted = 255 - mask
+    
+    # Find connected components in inverted image
+    labeled, num_features = ndimage.label(inverted)
+    
+    if num_features > 1:
+        # Calculate size of each component
+        component_sizes = ndimage.sum(inverted, labeled, range(1, num_features + 1))
+        
+        # Find largest component (main background)
+        largest_component_label = np.argmax(component_sizes) + 1
+        
+        # Keep only largest black region, fill all other black regions with white
+        largest_component_mask = (labeled == largest_component_label)
+        mask = np.where(largest_component_mask, 0, 255).astype(np.uint8)
+    
+    return mask
+
+
+def rotmat_to_euler_xyz(R: np.ndarray) -> np.ndarray:
+    """Convert rotation matrix to XYZ Euler angles (in radians)."""
+    sy = np.sqrt(R[0, 0] ** 2 + R[1, 0] ** 2)
+    singular = sy < 1e-6
+    if not singular:
+        x = np.arctan2(R[2, 1], R[2, 2])
+        y = np.arctan2(-R[2, 0], sy)
+        z = np.arctan2(R[1, 0], R[0, 0])
+    else:
+        x = np.arctan2(-R[1, 2], R[1, 1])
+        y = np.arctan2(-R[2, 0], sy)
+        z = 0
+    return np.array([x, y, z])
+
+
+def extract_head_orientation(predictions: dict, frame_idx: int) -> dict:
+    """Extract head orientation as Euler angles and direction vectors."""
+    torso_rotvec = predictions["torso_pose"][frame_idx].cpu()
+    neck_rotvec = predictions["neck_pose"][frame_idx].cpu()
+    
+    torso_rotmat = rotvec_to_rotmat(torso_rotvec.unsqueeze(0))[0]
+    neck_rotmat = rotvec_to_rotmat(neck_rotvec.unsqueeze(0))[0]
+    
+    head_rotmat = (torso_rotmat @ neck_rotmat).numpy()
+    euler_xyz = rotmat_to_euler_xyz(head_rotmat)
+    
+    right_vec = head_rotmat[:, 0]
+    up_vec = head_rotmat[:, 1]
+    forward_vec = -head_rotmat[:, 2]
+    
+    return {
+        "euler_xyz_radians": euler_xyz.tolist(),
+        "forward": forward_vec.tolist(),
+        "up": up_vec.tolist(),
+        "right": right_vec.tolist(),
+    }
+
+
+def render_flame_mask(
     verts: torch.Tensor,
     faces: torch.Tensor,
     c2w: torch.Tensor,
     output_size: int = 512,
-) -> Image.Image:
-    """
-    Create a combined image with original, mesh, and blended views.
-
-    Args:
-        original_image: PIL Image of the original frame
-        verts: Vertices tensor for a single frame, shape (num_verts, 3)
-        faces: Faces tensor, shape (num_faces, 3)
-        c2w: Camera-to-world transformation matrix, shape (4, 4)
-        output_size: Size of each sub-image in the combined output
-
-    Returns:
-        PIL Image with three views side-by-side (original, mesh, blended)
-    """
-    # Render the mesh
-    color, depth = render_mesh(verts=verts, faces=faces, c2w=c2w)
-
-    # Resize original to match output size
-    original_resized = original_image.convert("RGB").resize((output_size, output_size))
-
-    # Create blended image (mesh overlaid on original)
-    mask = (depth > 0).astype(np.float32)[..., None]
-    blended = (np.array(color) * mask + np.array(original_resized) * (1 - mask)).astype(np.uint8)
-
-    # Combine all three images horizontally
-    combined = Image.new("RGB", (output_size * 3, output_size))
-    combined.paste(original_resized, (0, 0))
-    combined.paste(Image.fromarray(color), (output_size, 0))
-    combined.paste(Image.fromarray(blended), (output_size * 2, 0))
-
-    return combined
+) -> np.ndarray:
+    """Render binary FLAME mask with holes filled."""
+    mask_verts, mask_faces, mask_colors = create_binary_mask_texture(verts, faces)
+    mask_render, _ = render_mesh(
+        verts=mask_verts,
+        faces=mask_faces,
+        c2w=c2w,
+        img_width=output_size,
+        img_height=output_size,
+        render_normals=False,
+        render_segmentation=True,
+        vertex_colors=mask_colors,
+        black_background=True
+    )
+    
+    # Convert to grayscale and fill holes (mouth region)
+    mask_gray = mask_render[:, :, 0]  # Take single channel
+    mask_filled = fill_mask_holes(mask_gray)
+    
+    return mask_filled
 
 
 if __name__ == "__main__":
@@ -81,19 +133,20 @@ if __name__ == "__main__":
         [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 1], [0, 0, 0, 1]], dtype=torch.float32
     )
     for i_frame in range(verts.shape[0]):
-        outpath = image_paths[i_frame].with_name(f"{image_paths[i_frame].name}_rendered.png")
-        if outpath.exists():
-            outpath.unlink()
+        # Create output folder named after the image
+        output_dir = image_paths[i_frame].parent / image_paths[i_frame].stem
+        output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Load original image
-        original = Image.open(image_paths[i_frame])
-
-        # Create combined rendering
-        combined = create_rendering_image(
-            original_image=original,
+        # Render and save FLAME mask
+        mask = render_flame_mask(
             verts=verts[i_frame],
             faces=flame.faces,
             c2w=c2w,
             output_size=512,
         )
-        combined.save(outpath)
+        Image.fromarray(mask).save(output_dir / "flame_segmentation.png")
+
+        # Extract and save head orientation
+        orientation = extract_head_orientation(predictions, i_frame)
+        with open(output_dir / "head_orientation.json", "w") as f:
+            json.dump(orientation, f, indent=2)

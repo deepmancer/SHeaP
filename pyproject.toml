@@ -7,7 +7,7 @@ name = "sheap"
 version = "0.1.0"
 description = "SHeaP: Self-Supervised Head Geometry Predictor Learned via 2D Gaussians"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 license = { file = "LICENSE.txt" }
 authors = [
     { name = "Liam Schoneveld" }
@@ -18,22 +18,12 @@ classifiers = [
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
-    "chumpy @ git+https://github.com/nlml/chumpy.git",
-    "numpy>=1.20.0",
-    "pillow>=9.0.0",
-    "pyrender>=0.1.45",
-    "roma>=1.5.4",
-    "scipy>=1.16.3",
-    "torch>=2.0.0",
-    "torchaudio>=2.0.0",
-    "torchvision>=0.15.1",
-    "tqdm>=4.67.1",
-    "trimesh>=4.9.0",
 ]
 
 [project.urls]

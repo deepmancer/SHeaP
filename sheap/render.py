@@ -14,23 +14,11 @@ def render_mesh(
     img_height: int = 512,
     fov_degrees: Union[float, int] = 14.2539,
     render_normals: bool = True,
+    render_segmentation: bool = False,
+    vertex_colors: Union[np.ndarray, None] = None,
+    black_background: bool = False,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """Render a mesh using pyrender with a perspective camera defined by FOV.
-
-    Args:
-        verts: Mesh vertex positions of shape (N, 3).
-        faces: Triangle vertex indices of shape (F, 3).
-        c2w: Camera-to-world transform matrix (extrinsics) of shape (4, 4).
-        img_width: Rendered image width in pixels. Default is 512.
-        img_height: Rendered image height in pixels. Default is 512.
-        fov_degrees: Vertical field of view in degrees. Default is 14.2539.
-        render_normals: If True, render normals as RGB. If False, render with lighting. Default is True.
-
-    Returns:
-        Tuple containing:
-            - color: RGB image from the render of shape (H, W, 3) as uint8.
-            - depth: Depth map from the render of shape (H, W) as float32.
-    """
+    """Render mesh with pyrender. Returns (color, depth) as (H,W,3) uint8 and (H,W) float32."""
     if isinstance(c2w, torch.Tensor):
         c2w = c2w.detach().cpu().numpy()
     if isinstance(verts, torch.Tensor):
@@ -46,7 +34,16 @@ def render_mesh(
     # Create trimesh mesh
     mesh = trimesh.Trimesh(vertices=verts, faces=faces)
 
-    if render_normals:
+    if render_segmentation:
+        # Use provided vertex colors for segmentation
+        if vertex_colors is not None:
+            mesh.visual.vertex_colors = vertex_colors
+        else:
+            # Fallback: create default segmentation colors
+            from .flame_segmentation import create_segmentation_texture
+            seg_colors = create_segmentation_texture(verts, faces)
+            mesh.visual.vertex_colors = seg_colors
+    elif render_normals:
         # Get vertex normals and map to RGB colors
         # Trimesh automatically computes normals when accessed
         normals = mesh.vertex_normals
@@ -54,17 +51,19 @@ def render_mesh(
         w2c = np.linalg.inv(c2w)
         normals_camera = normals @ w2c[:3, :3].T
         # Map from [-1, 1] to [0, 255] for RGB
-        vertex_colors = ((normals_camera + 1.0) * 0.5 * 255).astype(np.uint8)
-        mesh.visual.vertex_colors = vertex_colors
+        vertex_colors_normals = ((normals_camera + 1.0) * 0.5 * 255).astype(np.uint8)
+        mesh.visual.vertex_colors = vertex_colors_normals
 
     # Convert to pyrender mesh
     render_mesh = pyrender.Mesh.from_trimesh(mesh)
 
-    # Create scene
-    if render_normals:
-        scene = pyrender.Scene(ambient_light=[1.0, 1.0, 1.0])
+    # Create scene with black or white background
+    bg_color = [0.0, 0.0, 0.0, 1.0] if black_background else [1.0, 1.0, 1.0, 1.0]
+    if render_normals or render_segmentation:
+        # For normals and segmentation, use full ambient light (no shading)
+        scene = pyrender.Scene(ambient_light=[1.0, 1.0, 1.0], bg_color=bg_color)
     else:
-        scene = pyrender.Scene(ambient_light=[0.3, 0.3, 0.3])
+        scene = pyrender.Scene(ambient_light=[0.3, 0.3, 0.3], bg_color=bg_color)
         # Add directional light
         light = pyrender.DirectionalLight(color=[1.0, 1.0, 1.0], intensity=3.0)
         scene.add(light, pose=c2w)
